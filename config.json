@@ -1,0 +1,49 @@
+{
+  "version": "auto-py-to-exe-configuration_v1",
+  "pyinstallerOptions": [
+    {
+      "optionDest": "filenames",
+      "value": "main.py"
+    },
+    {
+      "optionDest": "onefile",
+      "value": true
+    },
+    {
+      "optionDest": "console",
+      "value": false
+    },
+    {
+      "optionDest": "name",
+      "value": "ProjectVault"
+    },
+    {
+      "optionDest": "icon_file",
+      "value": "assets/icons/project_vault_icon_128.ico"
+    },
+    {
+      "optionDest": "datas",
+      "value": "assets;assets"
+    },
+    {
+      "optionDest": "hiddenimports",
+      "value": "PySide6.QtCore"
+    },
+    {
+      "optionDest": "hiddenimports",
+      "value": "PySide6.QtGui"
+    },
+    {
+      "optionDest": "hiddenimports",
+      "value": "PySide6.QtWidgets"
+    },
+    {
+      "optionDest": "noconfirm",
+      "value": true
+    },
+    {
+      "optionDest": "clean_build",
+      "value": true
+    }
+  ]
+}
