@@ -26,6 +26,19 @@ def _git_env() -> dict[str, str]:
     return env
 
 
+def _hidden_subprocess_kwargs() -> dict:
+    if os.name != "nt":
+        return {}
+
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
+    return {
+        "startupinfo": startupinfo,
+        "creationflags": subprocess.CREATE_NO_WINDOW,
+    }
+
+
 def _run_git(repo_path: Path, args: list[str]) -> tuple[bool, str]:
     try:
         result = subprocess.run(
@@ -37,6 +50,7 @@ def _run_git(repo_path: Path, args: list[str]) -> tuple[bool, str]:
             timeout=120,
             check=False,
             env=_git_env(),
+            **_hidden_subprocess_kwargs(),
         )
         output = (result.stdout or "").strip()
         err = (result.stderr or "").strip()
