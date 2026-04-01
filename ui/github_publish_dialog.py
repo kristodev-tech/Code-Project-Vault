@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import re
 
+from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -12,6 +14,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QProgressDialog,
     QTextBrowser,
     QTextEdit,
     QVBoxLayout,
@@ -34,6 +37,51 @@ def _safe_repo_name(value: str) -> str:
     return value or "new-repository"
 
 
+class PublishWorker(QThread):
+    success = Signal(dict)
+    error = Signal(str)
+
+    def __init__(
+        self,
+        project_path: str,
+        repo_name: str,
+        owner_type: str,
+        owner_name: str,
+        description: str,
+        private: bool,
+        commit_message: str,
+        init_git_if_needed: bool,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.project_path = project_path
+        self.repo_name = repo_name
+        self.owner_type = owner_type
+        self.owner_name = owner_name
+        self.description = description
+        self.private = private
+        self.commit_message = commit_message
+        self.init_git_if_needed = init_git_if_needed
+
+    def run(self) -> None:
+        try:
+            result = publish_project(
+                project_path=self.project_path,
+                repo_name=self.repo_name,
+                owner_type=self.owner_type,
+                owner_name=self.owner_name,
+                description=self.description,
+                private=self.private,
+                commit_message=self.commit_message,
+                init_git_if_needed=self.init_git_if_needed,
+            )
+            self.success.emit(result)
+        except (GitHubPublishError, GitHubAuthError) as exc:
+            self.error.emit(str(exc))
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
 class GitHubPublishDialog(QDialog):
     def __init__(self, project: Project, parent=None):
         super().__init__(parent)
@@ -41,6 +89,8 @@ class GitHubPublishDialog(QDialog):
         self.project = project
         self.connected_login = ""
         self.installations: list[dict] = []
+        self.worker: PublishWorker | None = None
+        self.progress_dialog: QProgressDialog | None = None
 
         self.setWindowTitle("Publish to GitHub")
         self.resize(760, 620)
@@ -64,6 +114,7 @@ class GitHubPublishDialog(QDialog):
         self.owner_name_edit.setPlaceholderText("Organization name")
 
         self.repo_name_edit = QLineEdit(_safe_repo_name(project.name or ""))
+
         self.description_edit = QTextEdit()
         self.description_edit.setMaximumHeight(90)
         self.description_edit.setPlainText(project.description or "")
@@ -88,25 +139,30 @@ class GitHubPublishDialog(QDialog):
         self.info_browser = QTextBrowser()
         self.info_browser.setOpenExternalLinks(True)
 
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+
         button_row = QHBoxLayout()
+
         self.refresh_btn = QPushButton("Refresh GitHub Info")
         self.refresh_btn.clicked.connect(self.refresh_github_info)
 
         self.publish_btn = QPushButton("Publish")
         self.publish_btn.clicked.connect(self.publish_now)
 
-        close_btn = QPushButton("Close")
-        close_btn.clicked.connect(self.reject)
+        self.close_btn = QPushButton("Close")
+        self.close_btn.clicked.connect(self.reject)
 
         button_row.addWidget(self.refresh_btn)
         button_row.addStretch(1)
         button_row.addWidget(self.publish_btn)
-        button_row.addWidget(close_btn)
+        button_row.addWidget(self.close_btn)
 
         layout.addWidget(title)
         layout.addWidget(self.summary_label)
         layout.addLayout(form)
         layout.addWidget(self.info_browser, 1)
+        layout.addWidget(self.status_label)
         layout.addLayout(button_row)
 
         self._update_owner_mode()
@@ -118,6 +174,43 @@ class GitHubPublishDialog(QDialog):
         if owner_type != "org":
             self.owner_name_edit.clear()
 
+    def _set_busy_ui(self, busy: bool) -> None:
+        self.owner_type_combo.setEnabled(not busy)
+        self.owner_name_edit.setEnabled(not busy and self.owner_type_combo.currentData() == "org")
+        self.repo_name_edit.setEnabled(not busy)
+        self.description_edit.setEnabled(not busy)
+        self.visibility_combo.setEnabled(not busy)
+        self.init_git_check.setEnabled(not busy)
+        self.commit_message_edit.setEnabled(not busy)
+        self.refresh_btn.setEnabled(not busy)
+        self.publish_btn.setEnabled(not busy)
+        self.close_btn.setEnabled(not busy)
+
+    def _show_progress_dialog(self) -> None:
+        self.progress_dialog = QProgressDialog(
+            "Publishing project to GitHub...\n\nPlease wait...",
+            None,
+            0,
+            0,
+            self,
+        )
+        self.progress_dialog.setWindowTitle("Publishing to GitHub")
+        self.progress_dialog.setWindowModality(Qt.WindowModal)
+        self.progress_dialog.setMinimumDuration(0)
+        self.progress_dialog.setAutoClose(False)
+        self.progress_dialog.setAutoReset(False)
+        self.progress_dialog.setCancelButton(None)
+        self.progress_dialog.setValue(0)
+        self.progress_dialog.show()
+        QApplication.processEvents()
+
+    def _close_progress_dialog(self) -> None:
+        if self.progress_dialog is not None:
+            self.progress_dialog.close()
+            self.progress_dialog.deleteLater()
+            self.progress_dialog = None
+            QApplication.processEvents()
+
     def refresh_github_info(self) -> None:
         if not is_configured():
             self.summary_label.setText("GitHub App settings are not configured yet.")
@@ -125,6 +218,7 @@ class GitHubPublishDialog(QDialog):
                 "<h3>GitHub Not Configured</h3>"
                 "<p>Open <b>GitHub Settings</b> in Project Vault and enter your GitHub App Client ID and Slug first.</p>"
             )
+            self.status_label.setText("")
             return
 
         try:
@@ -170,6 +264,7 @@ class GitHubPublishDialog(QDialog):
                 </ul>
                 """
             )
+            self.status_label.setText("Ready to publish.")
 
         except Exception as exc:
             self.summary_label.setText("GitHub connection is required before publishing.")
@@ -178,6 +273,7 @@ class GitHubPublishDialog(QDialog):
                 f"<p>{str(exc)}</p>"
                 "<p>Configure GitHub Settings and connect GitHub first.</p>"
             )
+            self.status_label.setText("GitHub is not ready.")
 
     def publish_now(self) -> None:
         if not is_configured():
@@ -204,31 +300,45 @@ class GitHubPublishDialog(QDialog):
             QMessageBox.warning(self, "Missing Organization", "Enter an organization name.")
             return
 
-        try:
-            result = publish_project(
-                project_path=self.project.root_path,
-                repo_name=repo_name,
-                owner_type=owner_type,
-                owner_name=owner_name,
-                description=description,
-                private=private,
-                commit_message=commit_message,
-                init_git_if_needed=init_git_if_needed,
-            )
+        self._set_busy_ui(True)
+        self.status_label.setText("Publishing to GitHub... please wait.")
+        self._show_progress_dialog()
 
-            repo_url = result.get("repo_url", "")
-            branch = result.get("branch", "")
+        self.worker = PublishWorker(
+            project_path=self.project.root_path,
+            repo_name=repo_name,
+            owner_type=owner_type,
+            owner_name=owner_name,
+            description=description,
+            private=private,
+            commit_message=commit_message,
+            init_git_if_needed=init_git_if_needed,
+            parent=self,
+        )
+        self.worker.success.connect(self._on_publish_success)
+        self.worker.error.connect(self._on_publish_error)
+        self.worker.finished.connect(self._on_publish_finished)
+        self.worker.start()
 
-            QMessageBox.information(
-                self,
-                "Publish Complete",
-                f"Repository published successfully.\n\n"
-                f"Repository: {repo_url}\n"
-                f"Branch: {branch}"
-            )
-            self.accept()
+    def _on_publish_success(self, result: dict) -> None:
+        repo_url = result.get("repo_url", "")
+        branch = result.get("branch", "")
+        self.status_label.setText("Publish complete.")
 
-        except (GitHubPublishError, GitHubAuthError) as exc:
-            QMessageBox.critical(self, "Publish Failed", str(exc))
-        except Exception as exc:
-            QMessageBox.critical(self, "Publish Failed", str(exc))
+        QMessageBox.information(
+            self,
+            "Publish Complete",
+            f"Repository published successfully.\n\n"
+            f"Repository: {repo_url}\n"
+            f"Branch: {branch}"
+        )
+        self.accept()
+
+    def _on_publish_error(self, message: str) -> None:
+        self.status_label.setText("Publish failed.")
+        QMessageBox.critical(self, "Publish Failed", message)
+
+    def _on_publish_finished(self) -> None:
+        self._close_progress_dialog()
+        self._set_busy_ui(False)
+        self.worker = None
