@@ -1,6 +1,6 @@
 # Project Vault
 
-**Project Vault** is a desktop application for organizing, launching, inspecting, tracking, and publishing code projects from one place.
+**Project Vault** is a Windows desktop application for organizing, launching, inspecting, tracking, and publishing code projects from one place.
 
 It is designed for developers who manage many local projects and want a faster way to browse project folders, view important details, launch tools, store repeatable commands, inspect Git status, and publish projects to GitHub.
 
