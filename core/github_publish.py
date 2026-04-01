@@ -1,14 +1,29 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from core.github_auth import _api_request, get_valid_access_token
 
 
 class GitHubPublishError(RuntimeError):
     pass
+
+
+def _git_env() -> dict[str, str]:
+    env = os.environ.copy()
+
+    # Prevent Git from waiting for interactive username/password prompts.
+    env["GIT_TERMINAL_PROMPT"] = "0"
+
+    # Prevent GUI askpass popups from blocking the worker.
+    env["GIT_ASKPASS"] = ""
+    env["SSH_ASKPASS"] = ""
+
+    return env
 
 
 def _run_git(repo_path: Path, args: list[str]) -> tuple[bool, str]:
@@ -19,8 +34,9 @@ def _run_git(repo_path: Path, args: list[str]) -> tuple[bool, str]:
             capture_output=True,
             text=True,
             shell=False,
-            timeout=60,
+            timeout=120,
             check=False,
+            env=_git_env(),
         )
         output = (result.stdout or "").strip()
         err = (result.stderr or "").strip()
@@ -36,7 +52,7 @@ def is_git_repo(project_path: str) -> bool:
 
 def ensure_git_repo(project_path: str, default_branch: str = "main") -> None:
     repo = Path(project_path)
-    ok, out = _run_git(repo, ["rev-parse", "--is-inside-work-tree"])
+    ok, _ = _run_git(repo, ["rev-parse", "--is-inside-work-tree"])
     if ok:
         return
 
@@ -48,7 +64,7 @@ def ensure_git_repo(project_path: str, default_branch: str = "main") -> None:
 def ensure_initial_commit(project_path: str, commit_message: str) -> None:
     repo = Path(project_path)
 
-    ok, out = _run_git(repo, ["rev-parse", "--verify", "HEAD"])
+    ok, _ = _run_git(repo, ["rev-parse", "--verify", "HEAD"])
     if ok:
         return
 
@@ -75,7 +91,7 @@ def get_current_branch(project_path: str) -> str:
 def set_remote_origin(project_path: str, remote_url: str) -> None:
     repo = Path(project_path)
 
-    ok, out = _run_git(repo, ["remote", "get-url", "origin"])
+    ok, _ = _run_git(repo, ["remote", "get-url", "origin"])
     if ok:
         ok, out = _run_git(repo, ["remote", "set-url", "origin", remote_url])
         if not ok:
@@ -87,8 +103,25 @@ def set_remote_origin(project_path: str, remote_url: str) -> None:
         raise GitHubPublishError(f"Failed to add remote origin: {out}")
 
 
-def push_branch(project_path: str, branch: str) -> None:
+def _build_authenticated_remote_url(clone_url: str, token: str) -> str:
+    parts = urlsplit(clone_url)
+    if parts.scheme not in {"http", "https"}:
+        raise GitHubPublishError("Only HTTPS clone URLs are supported for GitHub publish.")
+
+    # GitHub App / token-based Git over HTTPS format:
+    # https://x-access-token:TOKEN@github.com/owner/repo.git
+    netloc = f"x-access-token:{token}@{parts.netloc}"
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
+def push_branch(project_path: str, branch: str, authenticated_remote_url: str) -> None:
     repo = Path(project_path)
+
+    # Temporarily push using an authenticated URL so Git never prompts.
+    ok, out = _run_git(repo, ["remote", "set-url", "origin", authenticated_remote_url])
+    if not ok:
+        raise GitHubPublishError(f"Failed to apply authenticated remote for push: {out}")
+
     ok, out = _run_git(repo, ["push", "-u", "origin", branch])
     if not ok:
         raise GitHubPublishError(f"Failed to push branch '{branch}': {out}")
@@ -107,7 +140,8 @@ def create_user_repo(
         "private": private,
         "auto_init": auto_init,
     }
-    return _api_request("POST", "/user/repos", token, payload)
+    data = _api_request("POST", "/user/repos", token, payload)
+    return data if isinstance(data, dict) else {}
 
 
 def create_org_repo(
@@ -122,7 +156,8 @@ def create_org_repo(
         "description": description,
         "private": private,
     }
-    return _api_request("POST", f"/orgs/{org}/repos", token, payload)
+    data = _api_request("POST", f"/orgs/{org}/repos", token, payload)
+    return data if isinstance(data, dict) else {}
 
 
 def publish_project(
@@ -166,8 +201,21 @@ def publish_project(
     if not clone_url:
         raise GitHubPublishError("GitHub repository was created, but no clone URL was returned.")
 
+    # Save the clean public remote URL in the repo first.
     set_remote_origin(project_path, clone_url)
-    push_branch(project_path, default_branch)
+
+    # Use the current GitHub user access token for the actual push.
+    token = get_valid_access_token()
+    authenticated_remote_url = _build_authenticated_remote_url(clone_url, token)
+
+    try:
+        push_branch(project_path, default_branch, authenticated_remote_url)
+    finally:
+        # Always restore the clean remote URL so the token is not left in config.
+        try:
+            set_remote_origin(project_path, clone_url)
+        except Exception:
+            pass
 
     return {
         "repo_name": repo_name,
