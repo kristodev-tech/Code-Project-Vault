@@ -5,6 +5,8 @@
 It is designed for developers who manage many local projects and want a faster way to browse project folders, view important details, launch tools, store repeatable commands, inspect Git status, and publish projects to GitHub.
 
 **THIS REPO WAS CREATED USING CODE PROJECT VAULT**
+
+**IF YOU WANT THE BUILT EXE DO DROP ON YOUR DESKTOP SO YOU CAN START USING RIGHT AWAY, JUST REACH OUT TO ME**
 ---
 
 ## Features
