@@ -6,7 +6,7 @@ It is designed for developers who manage many local projects and want a faster w
 
 **I CREATED THIS REPO USING CODE PROJECT VAULT**
 
-**IF YOU WANT THE BUILT EXE TO DROP ON YOUR DESKTOP SO YOU CAN START USING IT RIGHT AWAY, JUST REACH OUT TO ME**
+**EXE is in the release**
 ---
 
 ## Features
